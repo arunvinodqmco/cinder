@@ -27,8 +27,10 @@ volume_opts = [
                help='quantum api endpoint login password'),
     cfg.BoolOpt('api_ssl_verify',
                default=False,
-               help='enable ssl verification for api communication')
-
+               help='enable ssl verification for api communication'),
+    cfg.StrOpt('vpg_name',
+               default=None,
+               help='quantum storage backend vpg-name')
 ]
 
 CONF = cfg.CONF
@@ -114,29 +116,31 @@ class QuantumDriver(driver.VolumeDriver):
             ' id: '   + volume['id']        + \
             ' size: ' + str(volume['size'])
         self.logmsg(vol_str)
+        r = self.RestAPIExecutor._create_volume(volume)
 
         # 2. use vpgid to create volume
         # =====================================================================================
-        self.logmsg('create_volume proceed - vpgId:{} volume:{}'.format(self.vpgid, volume['display_name']))
-        params = {"vpgId" : self.vpgid, "async" : "false"}
-        data   = {
-            "name": volume['display_name'],
-            "ecLevel": "ec-1",
-            "rebuildOrderPriority": "high",
-            "chapEnabled": "false",
-            "tierId": "1",
-            "size": {
-                "GiB": volume['size']
-            },
-            "accessControl": {
-                "initiatorName": self.initiator_iqn,
-                "access": "readwrite"
-            }
-        }
-        r = requests.post(self.p3api_v2 + "vPG/vsVolume", params=params, json=data, auth=('pivot3','pivot3'), verify=False)
+        # self.logmsg('create_volume proceed - vpgId:{} volume:{}'.format(self.vpgid, volume['display_name']))
+        # params = {"vpgId" : self.vpgid, "async" : "false"}
+        # data   = {
+        #     "name": volume['display_name'],
+        #     "ecLevel": "ec-1",
+        #     "rebuildOrderPriority": "high",
+        #     "chapEnabled": "false",
+        #     "tierId": "1",
+        #     "size": {
+        #         "GiB": volume['size']
+        #     },
+        #     "accessControl": {
+        #         "initiatorName": self.initiator_iqn,
+        #         "access": "readwrite"
+        #     }
+        # }
+        # r = requests.post(self.p3api_v2 + "vPG/vsVolume", params=params, json=data, auth=('pivot3','pivot3'), verify=False)
         self.print_requests_response("qmco api create volume", r)
+        LOG.debug("quantum volume creation response: %s",r)
         if ( r.status_code == 201 and len(r.content)):
-            self.logmsg('create_volume done')
+            LOG.debug('create_volume done')
             return
         else:
             self.raise_assert('Got status code:{} with response:{}'.format(r.status_code, r.text))
@@ -301,7 +305,7 @@ class QuantumDriver(driver.VolumeDriver):
 class QuantumRestAPIExecutor(object):
 
     def __init__(self, *args, **kwargs):
-        
+
         self.api_endpoint_ip = kwargs['api_endpoint_ip']
         self.api_version = kwargs['api_version']
         self.api_username = kwargs['api_username']
@@ -327,7 +331,8 @@ class QuantumRestAPIExecutor(object):
         required_config = {'api_endpoint_ip': self.api_endpoint_ip,
          'api_version': self.api_version,
          'api_username': self.api_username, 'api_password': self.api_password,
-          'api_ssl_verify': self.ssl_verify}
+          'api_ssl_verify': self.ssl_verify,
+          'vpg': self.vpg_name}
 
         if None in required_config.values() or "" in required_config.values():
             _list = [key for key,value in required_config.items() if value in [None,""]]
@@ -352,9 +357,7 @@ class QuantumRestAPIExecutor(object):
             return None
         elif ( r.status_code == 200 ):
             r_json = r.json()
-            #return  r_json[0]['vpgid']
-            #dummy
-            return "600176c27bacb2c5c77c9cbe2916c172"
+            return  r_json[0]['vpgid']
 
     def vpg_space_stats(self):
         #write vpg specific api to get space status
@@ -362,10 +365,37 @@ class QuantumRestAPIExecutor(object):
         space_stats = {'total_capacity':42, 'free_capacity':42}
         return space_stats
 
+    def _create_volume(self,volume):
+        params = {"vpgId" : self.vpgid, "async" : "false"}
+        data   = {
+            "name": volume['display_name'],
+            "ecLevel": "ec-1",
+            "rebuildOrderPriority": "high",
+            "chapEnabled": "false",
+            "tierId": "1",
+            "size": {
+                "GiB": volume['size']
+            },
+            "accessControl": {
+                "initiatorName": "dummy-initiator",
+                "access": "readwrite"
+            }
+        }
+        api = "vPG/vsVolume"
+        r = self.post_query(api,params,data)
+        return r
+
     def get_query(self,api,params,data={}):
         return requests.get(self.uri + api,
                 params=params,
                 data=data,
+                auth=(self.api_username,self.api_password),
+                verify=self.ssl_verify)
+
+    def post_query(self,api,params,data={}):
+        return requests.post(self.uri + api,
+                params=params,
+                json=data,
                 auth=(self.api_username,self.api_password),
                 verify=self.ssl_verify)
 
