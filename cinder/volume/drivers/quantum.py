@@ -1,4 +1,4 @@
-__author__ = 'Brian Auld'
+__author__ = "Brian Auld, Arun Vinod"
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -6,15 +6,29 @@ from cinder import interface
 from cinder.volume import driver
 import requests
 import json
+from cinder import exception
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 ENABLE_TRACE = False
 
 volume_opts = [
-    cfg.StrOpt('quantum_api_endpoint',
-               default='https://10.134.204.84:8080',
-               help='the api endpoint at which the quantum storage system sits')
+    cfg.StrOpt('api_endpoint_ip',
+               default=None,
+               help='the api endpoint IP at which the quantum storage system sits'),
+    cfg.IntOpt('api_version',
+               default='2',
+               help='quantum api endpoint version'),
+    cfg.StrOpt('api_username',
+               default=None,
+               help='quantum api endpoint login username'),
+    cfg.StrOpt('api_password',
+               default=None,
+               help='quantum api endpoint login password'),
+    cfg.BoolOpt('api_ssl_verify',
+               default=False,
+               help='enable ssl verification for api communication')
+
 ]
 
 CONF = cfg.CONF
@@ -27,17 +41,34 @@ class QuantumDriver(driver.VolumeDriver):
 
 
     def __init__(self, *args, **kwargs):
+
         super(QuantumDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(volume_opts)
-        self.endpoint = self.configuration.safe_get('quantum_api_endpoint')
+        self.api_endpoint_ip = self.configuration.safe_get('api_endpoint_ip')
+        self.api_version = self.configuration.safe_get('api_version')
+        self.api_username = self.configuration.safe_get('api_username')
+        self.api_password = self.configuration.safe_get('api_password')
+        self.ssl_verify = self.configuration.safe_get('api_ssl_verify')
+        self.vpg_name = self.configuration.safe_get('vpg_name')
 
-        self.vpg_name      = "VG509"
-        self.p3api_v1 = "https://10.134.204.84:8443/p3api/v1/"
-        self.p3api_v2 = "https://10.134.204.84:8080/p3api/v2/api/"
-        # we should be able to set this via our api but it's troublesome
+        LOG.info("quantum api ip: {ip}  version: {ver}  username: {user} passwod: {passw}  ssl_ver: {ssl}  vpg: {vpg_n} ".format(
+        ip=self.api_endpoint_ip,
+        ver=self.api_version,
+        user=self.api_username,
+        passw=self.api_password,
+        ssl=self.ssl_verify,
+        vpg_n=self.vpg_name))
+
+        self.target_ip_address = self.configuration.safe_get('target_ip_address')
+        self.target_port = self.configuration.safe_get('target_port')
+        self.target_helper = self.configuration.safe_get('target_helper')
+        self.storage_protocol = self.configuration.safe_get('storage_protocol')
+        self.target_portal = self.target_ip_address + ":" + str(self.target_port)
+        self.target_driver = self.target_mapping[self.configuration.safe_get('target_helper')]
+
         self.initiator_iqn = "iqn.2005-03.org.open-iscsi:41301bd2d5c1"
-        self.single_poc_target_portal = "10.134.22.21"
-        
+
+
     def raise_assert(self, str):
         assert False,str
 
@@ -45,15 +76,28 @@ class QuantumDriver(driver.VolumeDriver):
         LOG.info('qmco_api ' + string)
 
     def do_setup(self, context):
-        params = {"vpgName":self.vpg_name, "async": "false"}
-        data   = {}
-        r = requests.get(self.p3api_v2 + "vPG", params=params, data=data, auth=('pivot3','pivot3'), verify=False)
-        self.print_requests_response("qmco api Get VPG Info", r)
-        if ( r.status_code == 200 ):
-            r_json = r.json()
-            self.vpgid =  r_json[0]['vpgid']
-        else:
-            self.raise_assert("vpgid was not retrievable")
+
+        try:
+            self.RestAPIExecutor = QuantumRestAPIExecutor(
+            api_endpoint_ip=self.api_endpoint_ip,
+            api_version=self.api_version,
+            api_username=self.api_username,
+            api_password=self.api_password,
+            ssl_verify=self.ssl_verify,
+            vpg_name = self.vpg_name)
+        except Exception:
+            msg = "unable to initialize api"
+            raise exception.VolumeBackendAPIException(data=msg)
+        LOG.debug("quantum API configuration loaded")
+
+
+    def check_for_setup_error(self):
+
+        can_login = self.RestAPIExecutor.login_verify()
+        if not can_login:
+            msg = "Unable to login to api endpoint using provided credentials"
+            raise exception.VolumeBackendAPIException(data=msg)
+        LOG.debug("successfully logged into api endpoint with credentials")
 
     def remove_export(self, context, volume):
 
@@ -63,13 +107,12 @@ class QuantumDriver(driver.VolumeDriver):
             ' size: ' + str(volume['size'])
         self.logmsg(vol_str)
 
-
     def create_volume(self, volume):
-        
+
         vol_str = 'create_volume start ->'        + \
             ' name: ' + volume['display_name']      + \
             ' id: '   + volume['id']        + \
-            ' size: ' + str(volume['size']) 
+            ' size: ' + str(volume['size'])
         self.logmsg(vol_str)
 
         # 2. use vpgid to create volume
@@ -103,7 +146,7 @@ class QuantumDriver(driver.VolumeDriver):
         vol_str = 'delete_volume start ->'        + \
             ' name: ' + volume['display_name']      + \
             ' id: '   + volume['id']        + \
-            ' size: ' + str(volume['size']) 
+            ' size: ' + str(volume['size'])
         self.logmsg(vol_str)
 
         # 1. delete volume
@@ -121,6 +164,7 @@ class QuantumDriver(driver.VolumeDriver):
             self.logmsg('create_volume done error')
 
     def create_export(self, context, volume, connector):
+
         vol_str = 'create export start ->'        + \
             ' name: ' + volume['display_name']      + \
             ' id: '   + volume['id']        + \
@@ -130,7 +174,8 @@ class QuantumDriver(driver.VolumeDriver):
         print('volume    -> {}'.format(volume))
         print('connector -> {}'.format(connector))
         self.logmsg("create export done")
-        
+        LOG.info("quantum ")
+
     def update_volume(self, volume):
         self.logmsg('update/n')
 
@@ -141,16 +186,12 @@ class QuantumDriver(driver.VolumeDriver):
         self.logmsg('get vols/n')
 
     def attach_volume(self, context, volume, instance_uuid, host_name, mountpoint):
-        
         print('qmco api attach_volume context:{}'.format(context))
         print('qmco api attach_volume volume:{}'.format(volume))
         print('qmco api attach_volume instance_uuid:{}'.format(instance_uuid))
         print('qmco api attach_volume host_name:{}'.format(host_name))
         print('qmco api attach_volume mountpoint:{}'.format(mountpoint))
         self.logmsg('attach_volume done/n')
-
-    def check_for_setup_error(self):
-        self.logmsg('check for setup error/n')
 
     def clone_image(self):
         self.logmsg('clone/n')
@@ -168,16 +209,22 @@ class QuantumDriver(driver.VolumeDriver):
         self.logmsg('extend vol /n')
 
     def get_volume_stats(self, refresh=False):
-         ret = {
-             'volume_backend_name': 'quantum',
-             'vendor_name': 'bar',
-             'driver_version': '3.0.0',
-             'storage_protocol': 'iSCSI',
-             'total_capacity_gb': 42,
-             'free_capacity_gb': 42
+         volume_backend_name = self.configuration.safe_get('volume_backend_name') or self.__class__.__name__
+         storage_protocol = self.configuration.safe_get('storage_protocol')
+         #no need to verify storage_protocol its already verified ny oslo, defaults to iscsi if not provided
+         vpg_stats = self.RestAPIExecutor.vpg_space_stats()
+         total_capacity_gb = vpg_stats['total_capacity']
+         free_capacity_gb = vpg_stats['free_capacity']
+         status = {
+             'volume_backend_name': volume_backend_name,
+             'vendor_name': 'Quantum',
+             'driver_version': self.VERSION,
+             'storage_protocol': storage_protocol,
+             'total_capacity_gb': total_capacity_gb,
+             'free_capacity_gb': free_capacity_gb
          }
-         self.logmsg('updating backend stats')
-         return ret
+         LOG.debug("quantum updating storage status: %s",status)
+         return status
 
     def initialize_connection(self, volume, connector):
 
@@ -213,7 +260,7 @@ class QuantumDriver(driver.VolumeDriver):
         # self.logmsg('ready to complete volume info for vol:{}'.format(p3volumne))
         # self.logmsg("initialize_connection done")
         # p3volume = self.get_volume_details(volume)
-        
+
         conn_info =  {'driver_volume_type': 'iscsi',
                       'data': {'target_discovered': False,
                                'target_portal': self.single_poc_target_portal,
@@ -225,14 +272,13 @@ class QuantumDriver(driver.VolumeDriver):
                                # 'auth_password': '8kU8FoRQWXJYE7ku',
                                'encrypted': False}}
         return conn_info
-                                                                  
+
     def terminate_connection(self, volume, connector, force):
         self.logmsg('terminate_connection enter/n')
         print('qmco api termination_connection volume:{}'.format(volume))
         print('qmco api termination_connection connector:{}'.format(connector))
         print('qmco api termination_connection force:{}'.format(force))
         self.logmsg('terminate_connection done/n')
-        
 
 
     # this help is not necessary if we can save the vol_id locally
@@ -246,11 +292,88 @@ class QuantumDriver(driver.VolumeDriver):
             return  r_json[0]
         else:
             self.raise_assert("vpgid was not retrievable")
-     
+
     def print_requests_response(self, action, response):
         print(action)
         pretty_json = json.loads(response.text)
         print(json.dumps(pretty_json, indent=2))
+
+class QuantumRestAPIExecutor(object):
+
+    def __init__(self, *args, **kwargs):
+        
+        self.api_endpoint_ip = kwargs['api_endpoint_ip']
+        self.api_version = kwargs['api_version']
+        self.api_username = kwargs['api_username']
+        self.api_password = kwargs['api_password']
+        self.ssl_verify = kwargs['ssl_verify']
+        self.vpg_name = kwargs['vpg_name']
+        self.uri = "https://{ip}:{port}/p3api/{version}".\
+                format(ip=self.api_endpoint_ip,\
+	                   port= 8443 if self.api_version == 1 else 8080,\
+	                   version="v1/" if self.api_version == 1 else "v2/api/")
+        LOG.info("quantum ip: {ip}  version: {ver} username: {user}  passwod: {passw} ssl_ver: {ssl} url: {url} vpg: {vpg_n}".format(
+        ip=self.api_endpoint_ip,
+        ver=self.api_version,
+        user=self.api_username,
+        passw=self.api_password,
+        ssl=self.ssl_verify,
+        url=self.uri,
+        vpg_n=self.vpg_name))
+        self._required_configs_present()
+
+    def _required_configs_present(self):
+        #will raise and exception when required config are not present
+        required_config = {'api_endpoint_ip': self.api_endpoint_ip,
+         'api_version': self.api_version,
+         'api_username': self.api_username, 'api_password': self.api_password,
+          'api_ssl_verify': self.ssl_verify}
+
+        if None in required_config.values() or "" in required_config.values():
+            _list = [key for key,value in required_config.items() if value in [None,""]]
+            LOG.error("varibles {conf} are  not set".format(\
+            conf=_list))
+            raise Exception
+
+    def login_verify(self):
+        #can also call different api to verify logins
+        self.vpgid = self.get_vpgid()
+        if self.vpgid is None:
+            return False
+        else:
+            return True
+
+    def get_vpgid(self):
+        api = "vPG"
+        params = {"vpgName":self.vpg_name, "async": "false"}
+        #data   = {}
+        r = self.get_query(api,params)
+        if ( r.status_code != 200 ):
+            return None
+        elif ( r.status_code == 200 ):
+            r_json = r.json()
+            #return  r_json[0]['vpgid']
+            #dummy
+            return "600176c27bacb2c5c77c9cbe2916c172"
+
+    def vpg_space_stats(self):
+        #write vpg specific api to get space status
+        #self.get_query(api,params)
+        space_stats = {'total_capacity':42, 'free_capacity':42}
+        return space_stats
+
+    def get_query(self,api,params,data={}):
+        return requests.get(self.uri + api,
+                params=params,
+                data=data,
+                auth=(self.api_username,self.api_password),
+                verify=self.ssl_verify)
+
+
+
+
+
+
 
 # A. Volume field
 # ===========================================================================================================

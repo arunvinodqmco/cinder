@@ -1,0 +1,147 @@
+[DEFAULT]
+debug = True
+host = cinder-volume-cluster-1
+glance_api_servers = https://standalone:9292
+glance_ca_certificates_file = /etc/pki/CA/cacert.pem
+glance_api_version = 2
+osapi_volume_listen_port = 8777
+my_ip = 10.175.40.11
+osapi_volume_listen = 0.0.0.0
+auth_strategy = keystone
+transport_url = rabbit://openstack:FX4HRSPC3ALS@standalone:5671
+use_multipath_for_image_xfer = True
+image_volume_cache_enabled = True
+osapi_volume_workers = 16
+cinder_internal_tenant_project_id = 285c4cf0a6304eca9f4598d984bb8499
+cinder_internal_tenant_user_id = 58db33fe375f4cf3abf3d3038e752416
+rpc_response_timeout = 300
+target_helper = lioadm
+target_protocol = iscsi
+enabled_backends = CLVM_base_tier, CLVM_flash_tier, quantum
+default_volume_type = flash_tier
+restore_discard_excess_bytes = True
+
+[quantum]
+volume_backend_name = quantum
+volume_driver = cinder.volume.drivers.quantum.QuantumDriver
+api_endpoint_ip = 10.134.204.84
+api_version = 2
+api_username = pivot3
+api_password = pivot3
+api_ssl_verify = false
+target_helper = lioadm
+target_ip_address = 10.134.22.21
+target_port = 3260
+vpg_name = VG509
+storage_protocol = iscsi
+#image_volume_cache_enabled = True
+#volume_clear = zero
+#quantum_type =
+#volume_group = stack-volumes-quantum
+
+[CLVM_base_tier]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_backend_name = CLVM_base_tier
+volume_group = vg_cinder_CLVM_base_tier
+target_protocol = iscsi
+target_helper = lioadm
+lvm_type = thin
+lvm_max_over_subscription_ratio = 6.0
+image_volume_cache_enabled = true
+
+[CLVM_flash_tier]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_backend_name = CLVM_flash_tier
+volume_group = vg_cinder_CLVM_flash_tier
+target_protocol = iscsi
+target_helper = lioadm
+lvm_type = thin
+lvm_max_over_subscription_ratio = 6.0
+image_volume_cache_enabled = true
+
+[barbican]
+barbican_endpoint = https://standalone:9311/
+auth_endpoint = https://standalone:35357/v3
+cafile = /etc/pki/CA/cacert.pem
+
+[barbican_service_user]
+[brcd_fabric_example]
+[cisco_fabric_example]
+[coordination]
+
+[database]
+connection = mysql+pymysql://cinder:9E0L8K1RJDDL@10.175.40.11/cinder
+idle_timeout = 300
+connection_recycle_time = 300
+
+[keystone_authtoken]
+auth_uri = https://standalone:5000
+auth_url = https://standalone:35357
+memcached_servers = standalone:11211
+auth_type = password
+project_domain_name = Default
+user_domain_name = Default
+project_name = service
+username = cinder
+password = 6PQ3YNBQUZ0T
+cafile = /etc/pki/CA/cacert.pem
+token_cache_time = 15
+
+[oslo_messaging_rabbit]
+rabbit_retry_interval = 1
+rabbit_retry_backoff = 2
+amqp_durable_queues = false
+rabbit_ha_queues = true
+
+[cors]
+allowed_origin = *
+
+[key_manager]
+backend = barbican
+
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+
+[oslo_messaging_notifications]
+driver = messagingv2
+
+[cache]
+enabled = True
+backend = oslo_cache.memcache_pool
+memcache_servers = standalone:11211
+
+[backend]
+
+[backend_defaults]
+
+[fc-zone-manager]
+
+[healthcheck]
+
+[nova]
+
+[oslo_messaging_amqp]
+
+[oslo_messaging_kafka]
+
+[oslo_middleware]
+
+[oslo_policy]
+
+[oslo_reports]
+
+[oslo_versionedobjects]
+
+[privsep]
+
+[profiler]
+
+[sample_castellan_source]
+
+[sample_remote_file_source]
+
+[service_user]
+
+[ssl]
+
+[vault]
